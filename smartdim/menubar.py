@@ -1,5 +1,6 @@
 # smartdim/menubar.py
 from __future__ import annotations
+
 from AppKit import (  # type: ignore
     NSApplication, NSStatusBar, NSVariableStatusItemLength,
     NSMenu, NSMenuItem, NSWorkspace,
