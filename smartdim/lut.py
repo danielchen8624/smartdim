@@ -188,7 +188,6 @@ def enable_flat(level: float = 0.20, n: int = 256) -> None:
     changed = False
     for d in _active_displays():
         CGSetDisplayTransferByTable(d, n, arr, arr, arr)
-    # we don't check applied here because CGSetDisplayTransferByTable raises if it can't
         changed = True
     if changed:
         _log(f"🧪 Flat LUT applied at {level:.2f}")
@@ -202,6 +201,7 @@ def enable_flat(level: float = 0.20, n: int = 256) -> None:
 #   A (→~0.33): whites-first subtractive dim (guard high, small offset), tiny beta
 #   B (~0.33→~0.66): widen subtractive band (lower guard, bigger offset), mild beta
 #   C (~0.66→1.00): subtractive + global dim beta → NUCLEAR
+#   (β is CONTINUOUS across B→C to avoid a brightening blip)
 # --------------------------------------------------------------------
 def set_intensity(intensity: float, n: int = 512) -> None:
     """
@@ -227,8 +227,6 @@ def set_intensity(intensity: float, n: int = 512) -> None:
     if s <= splitA:
         # ---------- Phase A: whites-first; protect greys ----------
         u = s / splitA  # 0..1 inside phase
-
-        # High guard & growing offset; tiny beta to avoid "camo"
         guard  = 0.94 - 0.10 * u   # 0.94 → 0.84
         offset = 0.00 + 0.14 * u   # 0.00 → 0.14
         beta   = 1.0 - 0.03 * u    # 1.00 → 0.97
@@ -245,8 +243,12 @@ def set_intensity(intensity: float, n: int = 512) -> None:
         u = (s - splitB) / (1.0 - splitB)  # 0..1
         guard  = 0.60 - 0.22 * u   # 0.60 → 0.38 (pull mids in)
         offset = 0.26 + 0.18 * u   # 0.26 → 0.44 (heavy subtractive)
-        beta_floor = 0.55          # 0.50 is spicier; 0.55 is readable
-        beta   = 1.0 - (1.0 - beta_floor) * (u ** 1.0)  # linear ramp 1.00 → 0.55
+
+        # Make beta continuous at B->C:
+        beta_floor = 0.55            # endpoint darkness; 0.50 is spicier
+        beta_start = 0.97 - 0.07*1.0 # = 0.90 (Phase-B end value)
+        beta       = beta_start - (beta_start - beta_floor) * (u ** 1.0)
+        # so: u=0 -> 0.90, u=1 -> 0.55 (no brightening step)
 
     apply_lut_subtractive_guarded(
         guard=guard,

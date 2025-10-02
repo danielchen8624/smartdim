@@ -1,46 +1,47 @@
 # smartdim/menubar.py
 from __future__ import annotations
+
 from AppKit import (  # type: ignore
-    NSApplication, NSStatusBar, NSVariableStatusItemLength,
-    NSMenu, NSMenuItem, NSWorkspace, NSView, NSSlider,
+    NSApplication, NSApp, NSStatusBar, NSVariableStatusItemLength,
+    NSMenu, NSMenuItem, NSWorkspace, NSView, NSSlider, NSTextField,
     NSApplicationActivationPolicyAccessory,
 )
 from Foundation import NSObject  # type: ignore
 
 from smartdim.lut import (  # type: ignore
-    enable, disable, toggle,
-    enable_aggressive, enable_extra_aggressive, enable_nuclear,
-    reapply_if_enabled, register_display_callbacks,
-    set_intensity,
+    set_intensity, disable,
+    register_display_callbacks, reapply_if_enabled, 
+    unregister_display_callbacks,
 )
 
 ICON_EMOJI = "🌙"
 
 class AppDelegate(NSObject):
     def applicationDidFinishLaunching_(self, _):
+        # App state
+        self.isMuted = False
+        self.lastSliderValue = 0.0
+
         # Status item
         self.statusItem = NSStatusBar.systemStatusBar().statusItemWithLength_(NSVariableStatusItemLength)
         self.statusItem.setTitle_(ICON_EMOJI)
 
+        # Menu
         menu = NSMenu.alloc().init()
 
-        # --- LUT actions
-        menu.addItem_(self._make_item("Enable Smart Dim (LUT)", "onAction:"))
-        menu.addItem_(self._make_item("Disable", "offAction:"))
-        menu.addItem_(self._make_item("Toggle", "toggleAction:"))
-        menu.addItem_(NSMenuItem.separatorItem())
-        menu.addItem_(self._make_item("Aggressive (preset)", "aggrAction:"))
-        menu.addItem_(self._make_item("Extra Aggressive (preset)", "extraAggrAction:"))
-        menu.addItem_(self._make_item("Nuclear (preset)", "nuclearAction:"))
+        label_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "Strength", None, ""
+        )
+        label_item.setEnabled_(False)
+        menu.addItem_(label_item)
+
+        self.slider_item = self._slider_item(selector="lutSliderChanged:", initial=self.lastSliderValue)
+        menu.addItem_(self.slider_item)
+
         menu.addItem_(NSMenuItem.separatorItem())
 
-        # --- Smart Dim (LUT) intensity slider (0 = no effect → almost nuclear)
-        lut_label = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-            "Smart Dim Intensity (0 = no effect → almost nuclear)", None, ""
-        )
-        lut_label.setEnabled_(False)
-        menu.addItem_(lut_label)
-        menu.addItem_(self._slider_item(selector="lutSliderChanged:", initial=0.0))  # start at 0
+        self.toggle_item = self._make_item("Toggle Off", "toggleAction:")
+        menu.addItem_(self.toggle_item)
 
         menu.addItem_(NSMenuItem.separatorItem())
         menu.addItem_(self._make_item("Quit", "quitAction:"))
@@ -57,10 +58,10 @@ class AppDelegate(NSObject):
         item.setTarget_(self)
         return item
 
-    def _slider_item(self, selector: str, initial: float = 0.0):
-        # A view-backed menu item hosting an NSSlider (0..1)
-        container = NSView.alloc().initWithFrame_(((0, 0), (220, 30)))
-        slider = NSSlider.alloc().initWithFrame_(((8, 6), (204, 18)))
+    def _slider_item(self, selector: str, initial: float = 0.0) -> NSMenuItem:
+        container = NSView.alloc().initWithFrame_(((0, 0), (240, 44)))
+
+        slider = NSSlider.alloc().initWithFrame_(((8, 8), (180, 20)))
         slider.setMinValue_(0.0)
         slider.setMaxValue_(1.0)
         slider.setFloatValue_(float(initial))
@@ -68,41 +69,85 @@ class AppDelegate(NSObject):
         slider.setTarget_(self)
         slider.setAction_(selector)
         container.addSubview_(slider)
+        self.slider = slider
+
+        value_label = NSTextField.alloc().initWithFrame_(((192, 8), (40, 20)))
+        value_label.setEditable_(False)
+        value_label.setBordered_(False)
+        value_label.setDrawsBackground_(False)
+        value_label.setAlignment_(1)  # right
+        value_label.setStringValue_(f"{int(round(initial*100))}%")
+        container.addSubview_(value_label)
+        self.value_label = value_label
 
         mi = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_("", None, "")
         mi.setView_(container)
         return mi
 
+    def _update_toggle_title(self):
+        self.toggle_item.setTitle_("Toggle On" if self.isMuted else "Toggle Off")
+
     # ----- Actions -----
-    # LUT presets
-    def onAction_(self, _):        print("[smartdim] enable (LUT)");  enable()
-    def offAction_(self, _):       print("[smartdim] disable");       disable()
-    def toggleAction_(self, _):    print("[smartdim] toggle");        toggle()
-    def aggrAction_(self, _):      print("[smartdim] aggressive");    enable_aggressive()
-    def extraAggrAction_(self, _): print("[smartdim] extra agg");     enable_extra_aggressive()
-    def nuclearAction_(self, _):   print("[smartdim] nuclear");       enable_nuclear()
-
-    # Slider: 0 = exact no-effect (restore), >0 = apply curve
     def lutSliderChanged_(self, sender):
-        val = float(sender.floatValue())
-        print(f"[smartdim] LUT intensity → {val:.3f}")
+        val = float(sender.floatValue())  # 0..1
+        self.lastSliderValue = val
+        self.value_label.setStringValue_(f"{int(round(val * 100))}%")
+
+        if self.isMuted:
+            return
         if val <= 0.001:
-            disable()           # exact pass-through (restore system colors)
+            disable()            # restore colors, but remain "On"
         else:
-            set_intensity(val)
+            set_intensity(val)   # apply mapping in lut.py
 
-    # Quit
+    def toggleAction_(self, _):
+        self.isMuted = not self.isMuted
+        self._update_toggle_title()
+
+        if self.isMuted:
+            disable()  # restore colors, keep slider value
+        else:
+            val = float(self.slider.floatValue())
+            if val <= 0.001:
+                disable()
+            else:
+                set_intensity(val)
+
     def quitAction_(self, _):
-        print("[smartdim] quit")
+        # 1) Restore colors
         disable()
-        import sys
-        sys.exit(0)
+        # 2) Unregister display callbacks
+        try:
+            unregister_display_callbacks()
+        except Exception:
+            pass
+        # 3) Remove wake observer
+        try:
+            NSWorkspace.sharedWorkspace().notificationCenter().removeObserver_(self)
+        except Exception:
+            pass
+        # 4) Remove status item so the menu bar icon disappears immediately
+        try:
+            NSStatusBar.systemStatusBar().removeStatusItem_(self.statusItem)
+        except Exception:
+            pass
+        # 5) Terminate the app
+        NSApp.terminate_(self)
 
-    # Reapply after wake
+    # Reapply after wake (only if not muted and slider > 0)
     def _install_notifications(self):
         center = NSWorkspace.sharedWorkspace().notificationCenter()
-        center.addObserver_selector_name_object_(self, "reapplyNotif:", "NSWorkspaceDidWakeNotification", None)
-    def reapplyNotif_(self, _): reapply_if_enabled()
+        center.addObserver_selector_name_object_(
+            self, "reapplyNotif:", "NSWorkspaceDidWakeNotification", None
+        )
+
+    def reapplyNotif_(self, _):
+        if self.isMuted:
+            return
+        if float(self.slider.floatValue()) > 0.001:
+            set_intensity(float(self.slider.floatValue()))
+        else:
+            disable()
 
 def main():
     app = NSApplication.sharedApplication()
