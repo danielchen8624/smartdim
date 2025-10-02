@@ -1,4 +1,3 @@
-# smartdim/lut.py
 from __future__ import annotations
 
 import array
@@ -48,7 +47,7 @@ def _remap_slider(s_raw: float) -> float:
     s = 0.0 if s_raw < 0.0 else 1.0 if s_raw > 1.0 else float(s_raw)
 
     # 1) gamma pre-emphasis (lower => punchier early response)
-    g = 0.65  # try 0.55..0.75
+    g = 0.65  #.55..0.75 works best so far ive tested
     s = s ** g
 
     # 2) gentle S-curve around the middle
@@ -60,11 +59,6 @@ def _remap_slider(s_raw: float) -> float:
     if y > 1.0: y = 1.0
     return y
 
-# --------------------------------------------------------------------
-# Subtractive guarded LUT (keeps constant differences above guard)
-#    - Below guard: mostly identity
-#    - Above guard: y = x - offset (clamped), preserving contrasts between nearby tones
-#    - Then apply optional global dim beta (multiplicative) to reach "nuclear"
 # --------------------------------------------------------------------
 def build_lut_subtractive_guarded(
     n: int,
@@ -82,7 +76,7 @@ def build_lut_subtractive_guarded(
     xs = [i / (n - 1) for i in range(n)]
     ys: List[float] = []
     for x in xs:
-        y_sub = max(0.0, x - off)   # subtractive (constant-difference above guard)
+        y_sub = max(0.0, x - off)   # subtractive (constant-difference above guard, prevents blending but doesnt darken everything at once
         w = _smoothstep(g0, g1, x)  # 0..1 blend across the guard band
         y = (1.0 - w) * x + w * y_sub
         ys.append(y)
@@ -99,7 +93,7 @@ def build_lut_subtractive_guarded(
     return arr, arr, arr
 
 # --------------------------------------------------------------------
-# Display enumeration (active only)
+# Display enumeration
 # --------------------------------------------------------------------
 def _active_displays(max_count: int = 16) -> List[int]:
     err, displays, count = CGGetActiveDisplayList(max_count, None, None)
@@ -111,7 +105,7 @@ def _active_displays(max_count: int = 16) -> List[int]:
     return ids
 
 # --------------------------------------------------------------------
-# Apply helpers
+# helpers
 # --------------------------------------------------------------------
 def _apply_rgb_tables(r: array.array, g: array.array, b: array.array) -> bool:
     applied = False
@@ -130,13 +124,13 @@ def apply_lut_subtractive_guarded(
 ) -> None:
     r, g, b = build_lut_subtractive_guarded(n, guard, guard_width, offset, beta, white_cap)
     if _apply_rgb_tables(r, g, b):
-        _log(f"✅ Applied subtractive-guarded LUT: guard={guard:.3f}±{guard_width:.3f}, "
+        _log(f" Applied subtractive-guarded LUT: guard={guard:.3f}±{guard_width:.3f}, "
              f"offset={offset:.3f}, beta={beta:.3f}, n={n}")
     else:
-        _log("⚠️ No active displays — LUT not applied")
+        _log(" No active displays — LUT not applied")
 
 # --------------------------------------------------------------------
-# Compatibility / presets (optional)
+# Compatibility wrappers (old names)
 # --------------------------------------------------------------------
 def enable_demo_whites_first() -> None:
     apply_lut_subtractive_guarded(guard=0.90, guard_width=0.05, offset=0.12, n=512, beta=1.0)
@@ -180,7 +174,7 @@ def unregister_display_callbacks():
     _log("Unregistered display callbacks")
 
 # --------------------------------------------------------------------
-# Flat LUT (diagnostic)
+# Flat LUT test (for debugging)
 # --------------------------------------------------------------------
 def enable_flat(level: float = 0.20, n: int = 256) -> None:
     level = 0.0 if level < 0.0 else 1.0 if level > 1.0 else level
@@ -196,12 +190,7 @@ def enable_flat(level: float = 0.20, n: int = 256) -> None:
         _log("⚠️ No active displays — flat LUT not applied")
 
 # --------------------------------------------------------------------
-# One-knob intensity (perceptually linearized):
-#   0.0 = NO EFFECT
-#   A (→~0.33): whites-first subtractive dim (guard high, small offset), tiny beta
-#   B (~0.33→~0.66): widen subtractive band (lower guard, bigger offset), mild beta
-#   C (~0.66→1.00): subtractive + global dim beta → NUCLEAR
-#   (β is CONTINUOUS across B→C to avoid a brightening blip)
+# Intensity setting (main API)
 # --------------------------------------------------------------------
 def set_intensity(intensity: float, n: int = 512) -> None:
     """
@@ -219,7 +208,7 @@ def set_intensity(intensity: float, n: int = 512) -> None:
     # Perceptual compensation
     s = _remap_slider(s_user)
 
-    # Even thirds: A/B/C each get ~1/3 of travel for steadier feel
+    # Even thirds: A/B/C each get ~1/3 of travel for steadier feel, splits to prevent blending of similar brightnesses while ensuring not all goes dark at once
     splitA = 1.0 / 3.0   # ~0.333
     splitB = 2.0 / 3.0   # ~0.666
     guard_width = 0.050  # widen slightly for softer band edge
@@ -239,7 +228,7 @@ def set_intensity(intensity: float, n: int = 512) -> None:
         beta   = 0.97 - 0.07 * u   # 0.97 → 0.90
 
     else:
-        # ---------- Phase C: subtractive + global dim → nuclear ----------
+        # ---------- Phase C: subtractive + global dim -> nuclear ----------
         u = (s - splitB) / (1.0 - splitB)  # 0..1
         guard  = 0.60 - 0.22 * u   # 0.60 → 0.38 (pull mids in)
         offset = 0.26 + 0.18 * u   # 0.26 → 0.44 (heavy subtractive)

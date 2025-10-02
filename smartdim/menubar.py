@@ -1,4 +1,3 @@
-# smartdim/menubar.py
 from __future__ import annotations
 
 from AppKit import (  # type: ignore
