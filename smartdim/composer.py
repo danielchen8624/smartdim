@@ -9,7 +9,6 @@ from Quartz import (
     CGDisplayRestoreColorSyncSettings,
 )
 
-# Import helpers from your existing modules (ok to import underscored)
 from smartdim.lut import _remap_slider as _remap_brightness_slider
 from smartdim.lut import build_lut_subtractive_guarded as _build_brightness_lut
 
@@ -32,12 +31,11 @@ def restore_colors() -> None:
     CGDisplayRestoreColorSyncSettings()
     _log("Restored original display colors")
 
-# --- Recreate the brightness parameter mapping without applying ---
 def _brightness_params_from_slider(s_user: float):
     """Reproduce smartdim.lut.set_intensity's parameter mapping, but do not apply."""
     s_user = 0.0 if s_user < 0.0 else 1.0 if s_user > 1.0 else float(s_user)
     if s_user <= 1e-3:
-        return None  # means 'identity'
+        return None  # Identity
 
     s = _remap_brightness_slider(s_user)
 
@@ -135,7 +133,7 @@ def apply_combined(intensity: float, warmth_strength: float, n: int = 512) -> No
     Build brightness + warmth LUTs, compose them, and apply once.
     Either control may be 0.0 (treated as identity).
     """
-    # If both are ~zero, restore system colors
+# restores system colours if both are zero
     if (intensity <= 1e-3) and (warmth_strength <= 1e-3):
         restore_colors()
         return

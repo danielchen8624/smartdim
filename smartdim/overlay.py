@@ -1,4 +1,3 @@
-# smartdim/overlay.py
 from __future__ import annotations
 from typing import Dict
 from AppKit import (
@@ -13,9 +12,7 @@ from AppKit import (
 )
 from Foundation import NSObject
 
-# ------------------------------------------------------------
-# Custom dim view (draws dual-layer overlay)
-# ------------------------------------------------------------
+# overlay dim view
 class _DimView(NSView):
     def initWithAlpha_(self, a: float):
         self = super().initWithFrame_(((0, 0), (10, 10)))
@@ -33,15 +30,14 @@ class _DimView(NSView):
         path = NSBezierPath.bezierPathWithRect_(rect)
         NSColor.colorWithCalibratedWhite_alpha_(0.0, self._alpha).set()
         path.fill()
-        # Add faint white layer to lift shadows (avoid crushing blacks)
+        # Add faint white layer to lift shadows, prevent darkenening blacks too mcuh
         lift_alpha = self._alpha * 0.15
         if lift_alpha > 0.0:
             NSColor.colorWithCalibratedWhite_alpha_(1.0, lift_alpha).set()
             path.fill()
 
-# ------------------------------------------------------------
 # Manager
-# ------------------------------------------------------------
+
 class DimOverlayManager(NSObject):
     def init(self):
         self = super().init()
@@ -58,7 +54,7 @@ class DimOverlayManager(NSObject):
         )
         return self
 
-    # Public API
+    #  API
     def enable_(self, alpha: float = 0.35):
         self.alpha = max(0.0, min(1.0, alpha))
         self._build_all()
@@ -76,12 +72,12 @@ class DimOverlayManager(NSObject):
         self.windows.clear()
         self.alpha = 0.0
 
-    # Notification handler
+    # Notifications
     def screensChanged_(self, _note):
         if self.alpha > 0:
             self._build_all()
 
-    # Build overlay windows for all screens
+    # overlay windows
     def _build_all(self):
         self.disable()
         for screen in NSScreen.screens():
@@ -102,10 +98,8 @@ class DimOverlayManager(NSObject):
             panel.setContentView_(view)
             panel.orderFrontRegardless()
             self.windows[str(id(panel))] = panel
+#--------------------------------------------------------------------
 
-# ------------------------------------------------------------
-# Singleton wrapper
-# ------------------------------------------------------------
 _manager: DimOverlayManager | None = None
 
 def enable_overlay(alpha: float = 0.35):

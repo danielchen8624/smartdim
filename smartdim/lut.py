@@ -10,19 +10,16 @@ from Quartz import (
     CGDisplayRemoveReconfigurationCallback,
 )
 
-# --------------------------------------------------------------------
-# State + logging
-# --------------------------------------------------------------------
+# State + logs
 CURRENT = {"enabled": False, "tau": 0.0, "alpha": 0.0, "beta": 1.0, "n": 512}
-LOG = True  # set False to silence prints
-WHITE_CAP: Optional[float] = None  # optional cap for pure white after mapping
+LOG = True  # SET LATER TO FALSE TO DISABLE LOGS
+WHITE_CAP: Optional[float] = None  # for whites
 
 def _log(*a) -> None:
     if LOG:
         print("[smartdim]", *a)
 
-# --------------------------------------------------------------------
-# Utilities
+
 # --------------------------------------------------------------------
 def _monotone_clip(ys: List[float]) -> List[float]:
     ys = [0.0 if y < 0.0 else 1.0 if y > 1.0 else y for y in ys]
@@ -46,11 +43,11 @@ def _remap_slider(s_raw: float) -> float:
     """
     s = 0.0 if s_raw < 0.0 else 1.0 if s_raw > 1.0 else float(s_raw)
 
-    # 1) gamma pre-emphasis (lower => punchier early response)
+    # gamma pre-emphasis (lower => punchier early response)
     g = 0.65  #.55..0.75 works best so far ive tested
     s = s ** g
 
-    # 2) gentle S-curve around the middle
+    # gentle S-curve around the middle
     k = 0.35
     y = 0.5 + (s - 0.5) * (1 + k - k * 4.0 * abs(s - 0.5))
 
@@ -81,7 +78,7 @@ def build_lut_subtractive_guarded(
         y = (1.0 - w) * x + w * y_sub
         ys.append(y)
 
-    # Global dim (uniform) to preserve local ratios further
+#global dim
     if b != 1.0:
         ys = [y * b for y in ys]
 
@@ -92,9 +89,7 @@ def build_lut_subtractive_guarded(
     arr = array.array("f", ys)
     return arr, arr, arr
 
-# --------------------------------------------------------------------
-# Display enumeration
-# --------------------------------------------------------------------
+#--------------------------------------------------------------------
 def _active_displays(max_count: int = 16) -> List[int]:
     err, displays, count = CGGetActiveDisplayList(max_count, None, None)
     if err != 0 or count == 0:
@@ -104,9 +99,7 @@ def _active_displays(max_count: int = 16) -> List[int]:
     _log(f"🖥️ Active displays ({count}):", ids)
     return ids
 
-# --------------------------------------------------------------------
 # helpers
-# --------------------------------------------------------------------
 def _apply_rgb_tables(r: array.array, g: array.array, b: array.array) -> bool:
     applied = False
     for d in _active_displays():
@@ -130,8 +123,6 @@ def apply_lut_subtractive_guarded(
         _log(" No active displays — LUT not applied")
 
 # --------------------------------------------------------------------
-# Compatibility wrappers (old names)
-# --------------------------------------------------------------------
 def enable_demo_whites_first() -> None:
     apply_lut_subtractive_guarded(guard=0.90, guard_width=0.05, offset=0.12, n=512, beta=1.0)
     CURRENT.update({"enabled": True, "beta": 1.0, "n": 512})
@@ -142,8 +133,6 @@ def enable_aggressive(): set_intensity(0.70)
 def enable_extra_aggressive(): set_intensity(0.85)
 def enable_nuclear(): set_intensity(1.00)
 
-# --------------------------------------------------------------------
-# Enable / disable / toggle / reapply
 # --------------------------------------------------------------------
 def disable() -> None:
     CURRENT["enabled"] = False
@@ -157,10 +146,8 @@ def toggle() -> None:
         set_intensity(0.4)
 
 def reapply_if_enabled(*_args) -> None:
-    # (Optional) Persist last guard/offset/beta in CURRENT if you want true reapply.
     pass
 
-# Callbacks (reapply after display changes)
 def _display_reconfig_callback(display, flags, userInfo) -> None:
     _log("Display reconfig:", display, flags)
     reapply_if_enabled()
@@ -174,8 +161,7 @@ def unregister_display_callbacks():
     _log("Unregistered display callbacks")
 
 # --------------------------------------------------------------------
-# Flat LUT test (for debugging)
-# --------------------------------------------------------------------
+# Flat LUT for debugging
 def enable_flat(level: float = 0.20, n: int = 256) -> None:
     level = 0.0 if level < 0.0 else 1.0 if level > 1.0 else level
     arr = array.array("f", [level] * n)
@@ -184,13 +170,11 @@ def enable_flat(level: float = 0.20, n: int = 256) -> None:
         CGSetDisplayTransferByTable(d, n, arr, arr, arr)
         changed = True
     if changed:
-        _log(f"🧪 Flat LUT applied at {level:.2f}")
+        _log(f" Flat LUT applied at {level:.2f}")
         CURRENT.update({"enabled": True, "n": n})
     else:
-        _log("⚠️ No active displays — flat LUT not applied")
+        _log(" No active displays — flat LUT not applied")
 
-# --------------------------------------------------------------------
-# Intensity setting (main API)
 # --------------------------------------------------------------------
 def set_intensity(intensity: float, n: int = 512) -> None:
     """
@@ -205,7 +189,6 @@ def set_intensity(intensity: float, n: int = 512) -> None:
         _log("Intensity 0 → restored original colors (no effect)")
         return
 
-    # Perceptual compensation
     s = _remap_slider(s_user)
 
     # Even thirds: A/B/C each get ~1/3 of travel for steadier feel, splits to prevent blending of similar brightnesses while ensuring not all goes dark at once
@@ -216,22 +199,22 @@ def set_intensity(intensity: float, n: int = 512) -> None:
     if s <= splitA:
         # ---------- Phase A: whites-first; protect greys ----------
         u = s / splitA  # 0..1 inside phase
-        guard  = 0.94 - 0.10 * u   # 0.94 → 0.84
-        offset = 0.00 + 0.14 * u   # 0.00 → 0.14
-        beta   = 1.0 - 0.03 * u    # 1.00 → 0.97
+        guard  = 0.94 - 0.10 * u   # 0.94 -> 0.84
+        offset = 0.00 + 0.14 * u   # 0.00 -> 0.14
+        beta   = 1.0 - 0.03 * u    # 1.00 _> 0.97
 
     elif s <= splitB:
         # ---------- Phase B: expand subtractive band ----------
         u = (s - splitA) / (splitB - splitA)  # 0..1
-        guard  = 0.84 - 0.24 * u   # 0.84 → 0.60
-        offset = 0.14 + 0.12 * u   # 0.14 → 0.26
-        beta   = 0.97 - 0.07 * u   # 0.97 → 0.90
+        guard  = 0.84 - 0.24 * u   # 0.84 -> 0.60
+        offset = 0.14 + 0.12 * u   # 0.14 -> 0.26
+        beta   = 0.97 - 0.07 * u   # 0.97 -> 0.90
 
     else:
         # ---------- Phase C: subtractive + global dim -> nuclear ----------
         u = (s - splitB) / (1.0 - splitB)  # 0..1
-        guard  = 0.60 - 0.22 * u   # 0.60 → 0.38 (pull mids in)
-        offset = 0.26 + 0.18 * u   # 0.26 → 0.44 (heavy subtractive)
+        guard  = 0.60 - 0.22 * u   # 0.60 -> 0.38 (pull mids in)
+        offset = 0.26 + 0.18 * u   # 0.26 -> 0.44 (heavy subtractive)
 
         # Make beta continuous at B->C:
         beta_floor = 0.55            # endpoint darkness; 0.50 is spicier
