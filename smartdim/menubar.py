@@ -1,4 +1,3 @@
-# smartdim/menubar.py
 from __future__ import annotations
 
 from AppKit import (  # type: ignore
@@ -8,22 +7,26 @@ from AppKit import (  # type: ignore
 )
 from Foundation import NSObject  # type: ignore
 
-# --- Brightness (your LUT engine) ---
+# --- Brightness module for callbacks + restore on quit 
 from smartdim.lut import (  # type: ignore
-    set_intensity as lut_set_intensity,
     disable as lut_disable,
     register_display_callbacks as lut_register_callbacks,
     reapply_if_enabled as lut_reapply_if_enabled,
     unregister_display_callbacks as lut_unregister_callbacks,
 )
 
-# --- Warmth (f.lux-style) ---
+# --- Warmth module for callbacks + restore on quit 
 from smartdim.warmth import (  # type: ignore
-    set_warmth,
     disable as warmth_disable,
     register_display_callbacks as warmth_register_callbacks,
     reapply_if_enabled as warmth_reapply_if_enabled,
     unregister_display_callbacks as warmth_unregister_callbacks,
+)
+
+# Composer to combine brightness + warmth into single LUT
+from smartdim.composer import (  # type: ignore
+    apply_combined as apply_combined_lut_warmth,
+    restore_colors as compose_restore,
 )
 
 ICON_EMOJI = "🌙"
@@ -53,7 +56,7 @@ class AppDelegate(NSObject):
         menu.addItem_(NSMenuItem.separatorItem())
 
         # Warmth section
-        lbl_w = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_("Warmth (f.lux-style)", None, "")
+        lbl_w = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_("Warmth", None, "")
         lbl_w.setEnabled_(False)
         menu.addItem_(lbl_w)
         menu.addItem_(self._slider_item_warmth(initial=self.lastWarmth))
@@ -144,6 +147,23 @@ class AppDelegate(NSObject):
         self.toggle_brightness_item.setTitle_("Toggle Brightness On" if self.isMutedLUT else "Toggle Brightness Off")
         self.toggle_warmth_item.setTitle_("Toggle Warmth On" if self.isMutedWarmth else "Toggle Warmth Off")
 
+    def _apply_current(self):
+        """
+        Compose current Brightness + Warmth into a single LUT and apply once.
+        Muted effects are treated as zero.
+        """
+        intensity = 0.0 if self.isMutedLUT else float(self.lutSlider.floatValue())
+        warmth    = 0.0 if self.isMutedWarmth else float(self.warmthSlider.floatValue())
+
+        # Update labels (keep UI in sync even if muted)
+        self.lutValueLabel.setStringValue_(f"{int(round(float(self.lutSlider.floatValue()) * 100))}%")
+        self.warmthValueLabel.setStringValue_(f"{int(round(float(self.warmthSlider.floatValue()) * 100))}%")
+
+        if intensity <= 0.001 and warmth <= 0.001:
+            compose_restore()
+        else:
+            apply_combined_lut_warmth(intensity, warmth, n=512)
+
     # =========================
     # Actions: Brightness (LUT)
     # =========================
@@ -151,24 +171,12 @@ class AppDelegate(NSObject):
         val = float(sender.floatValue())  # 0..1
         self.lastLUT = val
         self.lutValueLabel.setStringValue_(f"{int(round(val * 100))}%")
-        if self.isMutedLUT:
-            return
-        if val <= 0.001:
-            lut_disable()  # restore colors for LUT path
-        else:
-            lut_set_intensity(val)
+        self._apply_current()
 
     def toggleBrightnessAction_(self, _):
         self.isMutedLUT = not self.isMutedLUT
         self._update_toggle_titles()
-        if self.isMutedLUT:
-            lut_disable()
-        else:
-            val = float(self.lutSlider.floatValue())
-            if val <= 0.001:
-                lut_disable()
-            else:
-                lut_set_intensity(val)
+        self._apply_current()
 
     # =========================
     # Actions: Warmth
@@ -177,43 +185,30 @@ class AppDelegate(NSObject):
         val = float(sender.floatValue())  # 0..1
         self.lastWarmth = val
         self.warmthValueLabel.setStringValue_(f"{int(round(val * 100))}%")
-        if self.isMutedWarmth:
-            return
-        if val <= 0.001:
-            warmth_disable()
-        else:
-            set_warmth(val)
+        self._apply_current()
 
     def toggleWarmthAction_(self, _):
         self.isMutedWarmth = not self.isMutedWarmth
         self._update_toggle_titles()
-        if self.isMutedWarmth:
-            warmth_disable()
-        else:
-            val = float(self.warmthSlider.floatValue())
-            if val <= 0.001:
-                warmth_disable()
-            else:
-                set_warmth(val)
+        self._apply_current()
 
     # =========================
     # Actions: Reset & Quit
     # =========================
     def resetAction_(self, _):
         # Restore colors and keep slider values (do not change UI)
-        lut_disable()
-        warmth_disable()
+        compose_restore()
 
     def quitAction_(self, _):
         # 1) Restore colors
         try:
-            lut_disable()
+            compose_restore()
         except Exception:
-            pass
-        try:
-            warmth_disable()
-        except Exception:
-            pass
+            # Fallback: call individual restores
+            try: lut_disable()
+            except Exception: pass
+            try: warmth_disable()
+            except Exception: pass
 
         # 2) Unregister display callbacks
         try:
@@ -250,24 +245,8 @@ class AppDelegate(NSObject):
         )
 
     def reapplyNotif_(self, _):
-        # Reapply brightness if not muted and > 0
-        if not self.isMutedLUT and float(self.lutSlider.floatValue()) > 0.001:
-            try:
-                # If your lut.reapply_if_enabled() later stores params, use it; otherwise set explicitly
-                lut_set_intensity(float(self.lutSlider.floatValue()))
-            except Exception:
-                lut_reapply_if_enabled()
-        else:
-            lut_disable()
-
-        # Reapply warmth if not muted and > 0
-        if not self.isMutedWarmth and float(self.warmthSlider.floatValue()) > 0.001:
-            try:
-                set_warmth(float(self.warmthSlider.floatValue()))
-            except Exception:
-                warmth_reapply_if_enabled()
-        else:
-            warmth_disable()
+        # Simply reapply the current combined state; respects mutes
+        self._apply_current()
 
 
 def main():
